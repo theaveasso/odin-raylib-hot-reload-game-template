@@ -15,7 +15,6 @@
 
 package game
 
-import "core:fmt"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
@@ -23,8 +22,10 @@ PIXEL_WINDOW_HEIGHT :: 180
 
 
 Game_Memory :: struct {
-	player_pos:  rl.Vector2,
-	some_number: int,
+	player_pos:   rl.Vector2,
+	some_number:  int,
+	some_string:  string,
+	debug_shapes: [dynamic]Debug_Shapes,
 }
 
 g_mem: ^Game_Memory
@@ -56,6 +57,10 @@ update :: proc() {
 		input.x += 1
 	}
 
+	draw_debug_circle({0, 20}, 6, rl.DARKBLUE)
+	draw_debug_line({10, 20}, {30, 80}, 2, rl.DARKBLUE)
+	draw_debug_rec({10, 20, 50, 100}, 6, rl.BROWN)
+
 	input = linalg.normalize0(input)
 	g_mem.player_pos += input * rl.GetFrameTime() * 100
 	g_mem.some_number += 1
@@ -65,24 +70,26 @@ draw :: proc() {
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.BLACK)
 
-	rl.BeginMode2D(game_camera())
-	rl.DrawRectangleV(g_mem.player_pos, {10, 20}, rl.YELLOW)
-	rl.DrawRectangleV({20, 20}, {10, 50}, rl.RED)
-	rl.DrawRectangleV({-30, -20}, {10, 10}, rl.GREEN)
-	rl.EndMode2D()
+	// drawing game components
+	{
+		rl.BeginMode2D(game_camera())
+		rl.DrawRectangleV(g_mem.player_pos, {10, 20}, rl.GREEN)
+		rl.DrawRectangleV({20, 20}, {10, 60}, rl.YELLOW)
+		rl.DrawRectangleV({30, -20}, {10, 10}, rl.BLUE)
 
-	rl.BeginMode2D(ui_camera())
-	// Note: main_hot_reload.odin clears the temp allocator at end of frame.
-	rl.DrawText(
-		fmt.ctprintf("some_number: %v\nplayer_pos: %v", g_mem.some_number, g_mem.player_pos),
-		5,
-		5,
-		8,
-		rl.WHITE,
-	)
-	rl.EndMode2D()
+		draw_debug_shapes()
+		rl.EndMode2D()
+	}
 
-	rl.EndDrawing()
+	// drawing game ui
+	{
+		rl.BeginMode2D(ui_camera())
+		rl.EndMode2D()
+		rl.DrawFPS(10, 10)
+
+		rl.EndDrawing()
+	}
+
 }
 
 @(export)

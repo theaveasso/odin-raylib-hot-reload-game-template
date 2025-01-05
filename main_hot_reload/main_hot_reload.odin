@@ -28,24 +28,6 @@ when ODIN_OS == .Windows {
 	DLL_EXT :: ".so"
 }
 
-// We copy the DLL because using it directly would lock it, which would prevent
-// the compiler from writing to it.
-copy_dll :: proc(to: string) -> bool {
-	exit: i32
-	when ODIN_OS == .Windows {
-		exit = libc.system(fmt.ctprintf("copy game.dll {0}", to))
-	} else {
-		exit = libc.system(fmt.ctprintf("cp game" + DLL_EXT + " {0}", to))
-	}
-
-	if exit != 0 {
-		fmt.printfln("Failed to copy game" + DLL_EXT + " to {0}", to)
-		return false
-	}
-
-	return true
-}
-
 Game_Code :: struct {
 	lib:               dynlib.Library,
 	modification_time: os.File_Time,
@@ -60,51 +42,6 @@ Game_Code :: struct {
 	hot_reloaded:      Game_Hot_Reloaded_Proc,
 	force_reload:      Game_Force_Reload_Proc,
 	force_restart:     Game_Force_Restart_Proc,
-}
-
-load_game_api :: proc(api_version: int) -> (api: Game_Code, ok: bool) {
-	mod_time, mod_time_error := os.last_write_time_by_name("game" + DLL_EXT)
-	if mod_time_error != os.ERROR_NONE {
-		fmt.printfln(
-			"Failed getting last write time of game" + DLL_EXT + ", error code: {1}",
-			mod_time_error,
-		)
-		return
-	}
-
-	// NOTE: this needs to be a relative path for Linux to work.
-	game_dll_name := fmt.tprintf(
-		"{0}game_{1}" + DLL_EXT,
-		"./" when ODIN_OS != .Windows else "",
-		api_version,
-	)
-	copy_dll(game_dll_name) or_return
-
-	// This proc matches the names of the fields in Game_API to symbols in the
-	// game DLL. It actually looks for symbols starting with `game_`, which is
-	// why the argument `"game_"` is there.
-	_, ok = dynlib.initialize_symbols(&api, game_dll_name, "game_", "lib")
-	if !ok {
-		fmt.printfln("Failed initializing symbols: {0}", dynlib.last_error())
-	}
-
-	api.api_version = api_version
-	api.modification_time = mod_time
-	ok = true
-
-	return
-}
-
-unload_game_api :: proc(api: ^Game_Code) {
-	if api.lib != nil {
-		if !dynlib.unload_library(api.lib) {
-			fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
-		}
-	}
-
-	if os.remove(fmt.tprintf("game_{0}" + DLL_EXT, api.api_version)) != os.ERROR_NONE {
-		fmt.printfln("Failed to remove game_{0}" + DLL_EXT + " copy", api.api_version)
-	}
 }
 
 main :: proc() {
@@ -147,14 +84,14 @@ main :: proc() {
 		window_open = game_code.update_and_render()
 		force_reload := game_code.force_reload()
 		force_restart := game_code.force_restart()
-		reload := force_reload || force_restart
+		should_reload := force_reload || force_restart
 		game_dll_mod, game_dll_mod_err := os.last_write_time_by_name("game" + DLL_EXT)
 
 		if game_dll_mod_err == os.ERROR_NONE && game_code.modification_time != game_dll_mod {
-			reload = true
+			should_reload = true
 		}
 
-		if reload {
+		if should_reload {
 			new_game_code, new_game_code_ok := load_game_api(game_code_version)
 
 			if new_game_code_ok {
@@ -232,8 +169,70 @@ main :: proc() {
 	mem.tracking_allocator_destroy(&tracking_allocator)
 }
 
-// Make game use good GPU on laptops.
+load_game_api :: proc(api_version: int) -> (api: Game_Code, ok: bool) {
+	mod_time, mod_time_error := os.last_write_time_by_name("game" + DLL_EXT)
+	if mod_time_error != os.ERROR_NONE {
+		fmt.printfln(
+			"Failed getting last write time of game" + DLL_EXT + ", error code: {1}",
+			mod_time_error,
+		)
+		return
+	}
 
+	// NOTE: this needs to be a relative path for Linux to work.
+	game_dll_name := fmt.tprintf(
+		"{0}game_{1}" + DLL_EXT,
+		"./" when ODIN_OS != .Windows else "",
+		api_version,
+	)
+	copy_dll(game_dll_name) or_return
+
+	// This proc matches the names of the fields in Game_API to symbols in the
+	// game DLL. It actually looks for symbols starting with `game_`, which is
+	// why the argument `"game_"` is there.
+	_, ok = dynlib.initialize_symbols(&api, game_dll_name, "game_", "lib")
+	if !ok {
+		fmt.printfln("Failed initializing symbols: {0}", dynlib.last_error())
+	}
+
+	api.api_version = api_version
+	api.modification_time = mod_time
+	ok = true
+
+	return
+}
+
+unload_game_api :: proc(api: ^Game_Code) {
+	if api.lib != nil {
+		if !dynlib.unload_library(api.lib) {
+			fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
+		}
+	}
+
+	if os.remove(fmt.tprintf("game_{0}" + DLL_EXT, api.api_version)) != os.ERROR_NONE {
+		fmt.printfln("Failed to remove game_{0}" + DLL_EXT + " copy", api.api_version)
+	}
+}
+
+// We copy the DLL because using it directly would lock it, which would prevent
+// the compiler from writing to it.
+copy_dll :: proc(to: string) -> bool {
+	exit: i32
+	when ODIN_OS == .Windows {
+		exit = libc.system(fmt.ctprintf("copy game.dll {0}", to))
+	} else {
+		exit = libc.system(fmt.ctprintf("cp game" + DLL_EXT + " {0}", to))
+	}
+
+	if exit != 0 {
+		fmt.printfln("Failed to copy game" + DLL_EXT + " to {0}", to)
+		return false
+	}
+
+	return true
+}
+
+// Make game use good GPU on laptops.
 @(export)
 NvOptimusEnablement: u32 = 1
 
