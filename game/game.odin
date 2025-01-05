@@ -57,45 +57,26 @@ update :: proc() {
 		input.x += 1
 	}
 
-	draw_debug_circle({0, 20}, 6, rl.DARKBLUE)
-	draw_debug_line({10, 20}, {30, 80}, 2, rl.DARKBLUE)
-	draw_debug_rec({10, 20, 50, 100}, 6, rl.BROWN)
-
 	input = linalg.normalize0(input)
 	g_mem.player_pos += input * rl.GetFrameTime() * 100
 	g_mem.some_number += 1
 }
 
 draw :: proc() {
+	draw_debug_circle(rl.GetMousePosition(), 10, rl.RED)
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.BLACK)
-
-	// drawing game components
-	{
-		rl.BeginMode2D(game_camera())
-		rl.DrawRectangleV(g_mem.player_pos, {10, 20}, rl.GREEN)
-		rl.DrawRectangleV({20, 20}, {10, 60}, rl.YELLOW)
-		rl.DrawRectangleV({30, -20}, {10, 10}, rl.BLUE)
-
-		draw_debug_shapes()
-		rl.EndMode2D()
-	}
-
-	// drawing game ui
-	{
-		rl.BeginMode2D(ui_camera())
-		rl.EndMode2D()
-		rl.DrawFPS(10, 10)
-
-		rl.EndDrawing()
-	}
-
+	rl.DrawRectangle(10, 10, 50, 100, rl.WHITE)
+	draw_debug_shapes()
+	rl.EndDrawing()
 }
 
 @(export)
 game_update_and_render :: proc() -> bool {
-	update()
+	// update()
 	draw()
+
+	clear(&g_mem.debug_shapes)
 	return !rl.WindowShouldClose()
 }
 
@@ -115,11 +96,13 @@ game_init :: proc() {
 		some_number = 100,
 	}
 
+	parse_level()
 	game_hot_reloaded(g_mem)
 }
 
 @(export)
 game_shutdown :: proc() {
+	delete(g_mem.debug_shapes)
 	free(g_mem)
 }
 
