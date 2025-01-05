@@ -2,12 +2,23 @@
 
 package main
 
+import "core:c/libc"
 import "core:dynlib"
 import "core:fmt"
-import "core:c/libc"
-import "core:os"
 import "core:log"
 import "core:mem"
+import "core:os"
+
+Game_Update_And_Render_Proc :: #type proc() -> bool
+Game_Init_Window_Proc :: #type proc()
+Game_Init_Proc :: #type proc()
+Game_Shutdown_Proc :: #type proc()
+Game_Shutdown_Window_Proc :: #type proc()
+Game_Memory_Proc :: #type proc() -> rawptr
+Game_Memory_Size_Proc :: #type proc() -> int
+Game_Hot_Reloaded_Proc :: #type proc(memory: rawptr)
+Game_Force_Reload_Proc :: #type proc() -> bool
+Game_Force_Restart_Proc :: #type proc() -> bool
 
 when ODIN_OS == .Windows {
 	DLL_EXT :: ".dll"
@@ -35,23 +46,23 @@ copy_dll :: proc(to: string) -> bool {
 	return true
 }
 
-Game_API :: struct {
-	lib: dynlib.Library,
-	init_window: proc(),
-	init: proc(),
-	update: proc() -> bool,
-	shutdown: proc(),
-	shutdown_window: proc(),
-	memory: proc() -> rawptr,
-	memory_size: proc() -> int,
-	hot_reloaded: proc(mem: rawptr),
-	force_reload: proc() -> bool,
-	force_restart: proc() -> bool,
+Game_Code :: struct {
+	lib:               dynlib.Library,
 	modification_time: os.File_Time,
-	api_version: int,
+	api_version:       int,
+	init_window:       Game_Init_Window_Proc,
+	init:              Game_Init_Proc,
+	update_and_render: Game_Update_And_Render_Proc,
+	shutdown:          Game_Shutdown_Proc,
+	shutdown_window:   Game_Shutdown_Window_Proc,
+	memory:            Game_Memory_Proc,
+	memory_size:       Game_Memory_Size_Proc,
+	hot_reloaded:      Game_Hot_Reloaded_Proc,
+	force_reload:      Game_Force_Reload_Proc,
+	force_restart:     Game_Force_Restart_Proc,
 }
 
-load_game_api :: proc(api_version: int) -> (api: Game_API, ok: bool) {
+load_game_api :: proc(api_version: int) -> (api: Game_Code, ok: bool) {
 	mod_time, mod_time_error := os.last_write_time_by_name("game" + DLL_EXT)
 	if mod_time_error != os.ERROR_NONE {
 		fmt.printfln(
@@ -62,7 +73,11 @@ load_game_api :: proc(api_version: int) -> (api: Game_API, ok: bool) {
 	}
 
 	// NOTE: this needs to be a relative path for Linux to work.
-	game_dll_name := fmt.tprintf("{0}game_{1}" + DLL_EXT, "./" when ODIN_OS != .Windows else "", api_version)
+	game_dll_name := fmt.tprintf(
+		"{0}game_{1}" + DLL_EXT,
+		"./" when ODIN_OS != .Windows else "",
+		api_version,
+	)
 	copy_dll(game_dll_name) or_return
 
 	// This proc matches the names of the fields in Game_API to symbols in the
@@ -80,20 +95,21 @@ load_game_api :: proc(api_version: int) -> (api: Game_API, ok: bool) {
 	return
 }
 
-unload_game_api :: proc(api: ^Game_API) {
+unload_game_api :: proc(api: ^Game_Code) {
 	if api.lib != nil {
 		if !dynlib.unload_library(api.lib) {
 			fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
 		}
 	}
 
-	if os.remove(fmt.tprintf("game_{0}" + DLL_EXT, api.api_version)) != nil {
+	if os.remove(fmt.tprintf("game_{0}" + DLL_EXT, api.api_version)) != os.ERROR_NONE {
 		fmt.printfln("Failed to remove game_{0}" + DLL_EXT + " copy", api.api_version)
 	}
 }
 
 main :: proc() {
 	context.logger = log.create_console_logger()
+	defer log.destroy_console_logger(context.logger)
 
 	default_allocator := context.allocator
 	tracking_allocator: mem.Tracking_Allocator
@@ -112,37 +128,38 @@ main :: proc() {
 		return err
 	}
 
-	game_api_version := 0
-	game_api, game_api_ok := load_game_api(game_api_version)
+	game_code_version := 0
+	game_code, game_code_ok := load_game_api(game_code_version)
 
-	if !game_api_ok {
+	if !game_code_ok {
 		fmt.println("Failed to load Game API")
 		return
 	}
 
-	game_api_version += 1
-	game_api.init_window()
-	game_api.init()
+	game_code_version += 1
+	game_code.init_window()
+	game_code.init()
 
-	old_game_apis := make([dynamic]Game_API, default_allocator)
+	old_game_codes := make([dynamic]Game_Code, default_allocator)
 
 	window_open := true
 	for window_open {
-		window_open = game_api.update()
-		force_reload := game_api.force_reload()
-		force_restart := game_api.force_restart()
+		window_open = game_code.update_and_render()
+		force_reload := game_code.force_reload()
+		force_restart := game_code.force_restart()
 		reload := force_reload || force_restart
 		game_dll_mod, game_dll_mod_err := os.last_write_time_by_name("game" + DLL_EXT)
 
-		if game_dll_mod_err == os.ERROR_NONE && game_api.modification_time != game_dll_mod {
+		if game_dll_mod_err == os.ERROR_NONE && game_code.modification_time != game_dll_mod {
 			reload = true
 		}
 
 		if reload {
-			new_game_api, new_game_api_ok := load_game_api(game_api_version)
+			new_game_code, new_game_code_ok := load_game_api(game_code_version)
 
-			if new_game_api_ok {
-				force_restart = force_restart || game_api.memory_size() != new_game_api.memory_size()
+			if new_game_code_ok {
+				force_restart =
+					force_restart || game_code.memory_size() != new_game_code.memory_size()
 
 				if !force_restart {
 					// This does the normal hot reload
@@ -151,10 +168,10 @@ main :: proc() {
 					// would unload the DLL. The DLL can contain stored info
 					// such as string literals. The old DLLs are only unloaded
 					// on a full reset or on shutdown.
-					append(&old_game_apis, game_api)
-					game_memory := game_api.memory()
-					game_api = new_game_api
-					game_api.hot_reloaded(game_memory)
+					append(&old_game_codes, game_code)
+					game_memory := game_code.memory()
+					game_code = new_game_code
+					game_code.hot_reloaded(game_memory)
 				} else {
 					// This does a full reset. That's basically like opening and
 					// closing the game, without having to restart the executable.
@@ -163,20 +180,20 @@ main :: proc() {
 					// if the size of the game memory has changed. That would
 					// probably lead to a crash anyways.
 
-					game_api.shutdown()
+					game_code.shutdown()
 					reset_tracking_allocator(&tracking_allocator)
 
-					for &g in old_game_apis {
+					for &g in old_game_codes {
 						unload_game_api(&g)
 					}
 
-					clear(&old_game_apis)
-					unload_game_api(&game_api)
-					game_api = new_game_api
-					game_api.init()
+					clear(&old_game_codes)
+					unload_game_api(&game_code)
+					game_code = new_game_code
+					game_code.init()
 				}
 
-				game_api_version += 1
+				game_code_version += 1
 			}
 		}
 
@@ -196,7 +213,7 @@ main :: proc() {
 	}
 
 	free_all(context.temp_allocator)
-	game_api.shutdown()
+	game_code.shutdown()
 	if reset_tracking_allocator(&tracking_allocator) {
 		// This prevents the game from closing without you seeing the memory
 		// leaks. This is mostly needed because I use Sublime Text and my game's
@@ -204,14 +221,14 @@ main :: proc() {
 		libc.getchar()
 	}
 
-	for &g in old_game_apis {
+	for &g in old_game_codes {
 		unload_game_api(&g)
 	}
 
-	delete(old_game_apis)
+	delete(old_game_codes)
 
-	game_api.shutdown_window()
-	unload_game_api(&game_api)
+	game_code.shutdown_window()
+	unload_game_api(&game_code)
 	mem.tracking_allocator_destroy(&tracking_allocator)
 }
 
